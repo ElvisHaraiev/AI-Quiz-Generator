@@ -1,0 +1,20 @@
+{
+  "name": "ai-quiz-generator",
+  "version": "1.0.0",
+  "description": "AI Quiz Generator — Chrome extension for generating quiz questions from learning materials with AI.",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "test": "node --test tests/educational-images.test.js tests/material.test.js tests/multi-material.test.js tests/file-limits.test.js tests/book-scenario.test.js tests/background-image-pipeline.test.js tests/chat-dialog.test.js tests/providers.test.js tests/geometry-answers.test.js tests/popup-behaviour.test.js tests/generic-books.test.js",
+    "check:pdfs": "node tools/check-pdfs.cjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "pdfjs-dist": "^2.16.105"
+  }
+}

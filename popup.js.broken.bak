@@ -1,0 +1,1967 @@
+// popup.js — Naurok AI popup.
+// Ukrainian UI only.
+// Real provider API only.
+// No mock generation. No automatic import to Naurok.
+
+if (typeof pdfjsLib !== "undefined") {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    chrome.runtime.getURL("lib/pdf.worker.min.js");
+}
+
+const DEFAULT_PROVIDER_CONFIG = {
+  provider: "openai",
+  apiKey: "",
+  model: "gpt-4o-mini",
+  baseUrl: "https://api.openai.com/v1"
+};
+
+const PROVIDER_DEFAULTS = {
+  openai: {
+    model: "gpt-4o-mini",
+    baseUrl: "https://api.openai.com/v1"
+  },
+  gemini: {
+    model: "gemini-1.5-flash",
+    baseUrl: ""
+  },
+  manus: {
+    model: "manus-1.6-lite",
+    baseUrl: "https://api.manus.ai"
+  }
+};
+
+const MAX_FILES = 2;
+const MAX_FILE_SIZE = 20 * 2048 * 2048;
+const MAX_IMAGES_FOR_AI = 8;
+const MAX_IMAGE_SIDE = 900;
+
+const els = {};
+
+let state = {
+  chats: [],
+  currentChatId: "",
+  providerConfig: { ...DEFAULT_PROVIDER_CONFIG },
+  pendingFiles: [],
+  isProcessing: false
+};
+
+document.addEventListener("DOMContentLoaded", init);
+
+async function init() {
+  cacheElements();
+  bindEvents();
+  await loadState();
+  await checkActiveTab();
+  renderAll();
+}
+
+function cacheElements() {
+  [
+    "newChatBtn",
+    "siteStatus",
+    "currentChatTitle",
+    "chatMessages",
+    "contextChips",
+    "fileChips",
+    "fileInput",
+    "attachBtn",
+    "attachMenu",
+    "uploadFileOption",
+    "attachTestSetList",
+    "promptInput",
+    "sendBtn",
+    "status",
+    "progressContainer",
+    "progressFill",
+    "progressText",
+    "historyList",
+    "historyMonthFilter",
+    "questionCountView",
+    "questionSetList",
+    "questionMonthFilter",
+    "questionsList",
+    "insertBtn",
+    "cancelInsertBtn",
+    "providerSelect",
+    "apiKeyInput",
+    "modelInput",
+    "baseUrlInput",
+    "saveProviderBtn",
+    "testProviderBtn",
+    "clearProviderBtn",
+    "providerStatus"
+  ].forEach((id) => {
+    els[id] = document.getElementById(id);
+  });
+}
+
+function bindEvents() {
+  document.querySelectorAll(".nav-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      switchPage(button.dataset.page);
+    });
+  });
+
+  els.newChatBtn?.addEventListener("click", createNewChat);
+
+ els.attachBtn?.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+
+  if (els.attachBtn) {
+    els.attachBtn.disabled = false;
+  }
+
+  if (els.attachMenu) {
+    toggleAttachMenu();
+    return;
+  }
+
+  els.fileInput?.click();
+});
+
+  els.uploadFileOption?.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+
+  hideAttachMenu();
+  els.fileInput?.click();
+   });
+
+  document.addEventListener("click", (event) => {
+    if (
+      els.attachMenu &&
+      !els.attachMenu.contains(event.target) &&
+      event.target !== els.attachBtn
+    ) {
+      hideAttachMenu();
+    }
+  });
+
+  els.fileInput?.addEventListener("change", handleFileSelection);
+  els.sendBtn?.addEventListener("click", handleSend);
+  els.insertBtn?.addEventListener("click", insertCurrentQuestions);
+  els.cancelInsertBtn?.addEventListener("click", cancelLastInsertion);
+
+  els.promptInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      handleSend();
+    }
+  });
+
+  els.promptInput?.addEventListener("input", autoResizePrompt);
+
+  els.providerSelect?.addEventListener("change", handleProviderChange);
+  els.saveProviderBtn?.addEventListener("click", saveProviderSettings);
+  els.testProviderBtn?.addEventListener("click", testProviderSettings);
+  els.clearProviderBtn?.addEventListener("click", clearProviderSettings);
+
+  els.questionMonthFilter?.addEventListener("change", renderQuestions);
+  els.historyMonthFilter?.addEventListener("change", renderHistory);
+}
+
+async function loadState() {
+  const stored = await chrome.storage.local.get([
+    "chats",
+    "currentChatId",
+    "providerConfig"
+  ]);
+
+  state.providerConfig =
+    stored.providerConfig || { ...DEFAULT_PROVIDER_CONFIG };
+
+  state.chats = Array.isArray(stored.chats)
+    ? stored.chats.map(normalizeStoredChat)
+    : [];
+
+  state.currentChatId = stored.currentChatId || "";
+
+  if (!state.chats.length) {
+    const chat = makeChat();
+    state.chats = [chat];
+    state.currentChatId = chat.id;
+    await saveChats();
+  }
+
+  if (!getCurrentChat()) {
+    state.currentChatId = state.chats[0].id;
+  }
+}
+
+function normalizeStoredChat(chat) {
+  const normalized = {
+    id: chat?.id || createChatId(),
+    title: chat?.title || "Новий чат",
+    messages: Array.isArray(chat?.messages) ? chat.messages : [],
+    files: Array.isArray(chat?.files) ? chat.files : [],
+    questions: Array.isArray(chat?.questions) ? chat.questions : [],
+    questionSets: Array.isArray(chat?.questionSets) ? chat.questionSets : [],
+    selectedQuestionSetId: chat?.selectedQuestionSetId || "",
+    attachedQuestionSetIds: Array.isArray(chat?.attachedQuestionSetIds)
+      ? chat.attachedQuestionSetIds
+      : [],
+    createdAt: chat?.createdAt || new Date().toISOString()
+  };
+
+  normalized.questionSets = normalized.questionSets.map((set) => {
+    return {
+      id: set?.id || createQuestionSetId(),
+      title:
+        set?.title ||
+        `Тести ${(set?.questions || []).length} питань — Навчальний тест`,
+      questions: Array.isArray(set?.questions) ? set.questions : [],
+      prompt: set?.prompt || "",
+      createdAt: set?.createdAt || normalized.createdAt,
+      updatedAt: set?.updatedAt || set?.createdAt || normalized.createdAt,
+      lastInsertion: set?.lastInsertion || null
+    };
+  });
+
+  if (!normalized.questionSets.length && normalized.questions.length) {
+    const set = makeQuestionSet({
+      title: `Тести ${normalized.questions.length} питань — Імпортовані питання`,
+      questions: normalized.questions,
+      prompt: "Імпортовано зі старого формату"
+    });
+
+    normalized.questionSets = [set];
+    normalized.selectedQuestionSetId = set.id;
+  }
+
+  if (normalized.questionSets.length && !normalized.selectedQuestionSetId) {
+    normalized.selectedQuestionSetId = normalized.questionSets[0].id;
+  }
+
+  const selectedSet = normalized.questionSets.find((set) => {
+    return set.id === normalized.selectedQuestionSetId;
+  });
+
+  if (selectedSet) {
+    normalized.questions = selectedSet.questions;
+  }
+
+  return normalized;
+}
+
+function createChatId() {
+  return (
+    "chat_" +
+    Date.now() +
+    "_" +
+    Math.floor(Math.random() * 10000)
+  );
+}
+
+function createQuestionSetId() {
+  return (
+    "qset_" +
+    Date.now() +
+    "_" +
+    Math.floor(Math.random() * 10000)
+  );
+}
+
+function makeChat() {
+  return {
+    id: createChatId(),
+    title: "Новий чат",
+    messages: [
+      {
+        sender: "assistant",
+        text:
+          "Вітаю! Додайте матеріали через кнопку + або напишіть запит. " +
+          "Після генерації відкрийте вкладку «Питання» та натисніть «Вставити в НаУрок».",
+        time: nowTime()
+      }
+    ],
+    files: [],
+    questions: [],
+    questionSets: [],
+    selectedQuestionSetId: "",
+    attachedQuestionSetIds: [],
+    createdAt: new Date().toISOString()
+  };
+}
+
+function makeQuestionSet({ title, questions, prompt }) {
+  const count = Array.isArray(questions) ? questions.length : 0;
+
+  return {
+    id: createQuestionSetId(),
+    title: title || `Тести ${count} питань — Навчальний тест`,
+    questions: Array.isArray(questions) ? questions : [],
+    prompt: prompt || "",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastInsertion: null
+  };
+}
+
+function getCurrentChat() {
+  return state.chats.find((chat) => chat.id === state.currentChatId) || null;
+}
+
+function getQuestionSets(chat = getCurrentChat()) {
+  return Array.isArray(chat?.questionSets) ? chat.questionSets : [];
+}
+
+function getSelectedQuestionSet(chat = getCurrentChat()) {
+  const sets = getQuestionSets(chat);
+
+  if (!sets.length) {
+    return null;
+  }
+
+  return sets.find((set) => set.id === chat.selectedQuestionSetId) || sets[0];
+}
+
+function getSelectedQuestions(chat = getCurrentChat()) {
+  return getSelectedQuestionSet(chat)?.questions || [];
+}
+
+function getAttachedQuestionSets(chat = getCurrentChat()) {
+  const ids = Array.isArray(chat?.attachedQuestionSetIds)
+    ? chat.attachedQuestionSetIds
+    : [];
+
+  return getQuestionSets(chat).filter((set) => ids.includes(set.id));
+}
+
+async function saveChats() {
+  await chrome.storage.local.set({
+    chats: state.chats,
+    currentChatId: state.currentChatId
+  });
+}
+
+function nowTime() {
+  return new Date().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function switchPage(page) {
+  document.querySelectorAll(".page").forEach((section) => {
+    section.classList.add("hidden");
+  });
+
+  document.querySelectorAll(".nav-btn").forEach((button) => {
+    button.classList.toggle("active", button.dataset.page === page);
+  });
+
+  const target = document.getElementById("page-" + page);
+
+  if (target) {
+    target.classList.remove("hidden");
+  }
+
+  renderAll();
+}
+
+async function checkActiveTab() {
+  const tab = await getNaurokActiveTab();
+  const ready = Boolean(tab);
+
+  if (!els.siteStatus) {
+    return;
+  }
+
+  els.siteStatus.textContent = ready
+    ? "Сторінка НаУрок: готово"
+    : "Сторінка НаУрок: відкрийте конструктор";
+
+  els.siteStatus.classList.toggle("ok", ready);
+  els.siteStatus.classList.toggle("error", !ready);
+}
+
+function renderAll() {
+  renderProviderSettings();
+  renderChat();
+  renderContextChips();
+  renderFiles();
+  renderAttachMenu();
+  renderHistory();
+  renderQuestions();
+  renderInsertActions();
+}
+
+function renderProviderSettings() {
+  const config = state.providerConfig || { ...DEFAULT_PROVIDER_CONFIG };
+  const provider = config.provider || "openai";
+  const defaults = PROVIDER_DEFAULTS[provider] || PROVIDER_DEFAULTS.openai;
+
+  if (els.providerSelect) {
+    els.providerSelect.value = provider;
+  }
+
+  if (els.apiKeyInput) {
+    els.apiKeyInput.value = config.apiKey || "";
+  }
+
+  if (els.modelInput) {
+    els.modelInput.value = config.model || defaults.model || "";
+  }
+
+  if (els.baseUrlInput) {
+    els.baseUrlInput.value = config.baseUrl || defaults.baseUrl || "";
+  }
+
+  updateProviderStatus(config.apiKey ? "Збережено" : "Не налаштовано");
+}
+
+function handleProviderChange() {
+  const provider = els.providerSelect?.value || "openai";
+  const defaults = PROVIDER_DEFAULTS[provider] || PROVIDER_DEFAULTS.openai;
+
+  if (els.modelInput) {
+    els.modelInput.value = defaults.model;
+  }
+
+  if (els.baseUrlInput) {
+    els.baseUrlInput.value = defaults.baseUrl;
+  }
+}
+
+async function saveProviderSettings() {
+  const provider = els.providerSelect?.value || "openai";
+  const defaults = PROVIDER_DEFAULTS[provider] || PROVIDER_DEFAULTS.openai;
+
+  state.providerConfig = {
+    provider,
+    apiKey: els.apiKeyInput?.value.trim() || "",
+    model: els.modelInput?.value.trim() || defaults.model,
+    baseUrl: els.baseUrlInput?.value.trim() || defaults.baseUrl
+  };
+
+  await chrome.storage.local.set({
+    providerConfig: state.providerConfig
+  });
+
+  updateProviderStatus("Збережено", "success");
+}
+
+async function testProviderSettings() {
+  await saveProviderSettings();
+
+  if (!state.providerConfig.apiKey) {
+    updateProviderStatus("Вкажіть API ключ", "error");
+    return;
+  }
+
+  updateProviderStatus("Перевірка...");
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: "testProvider",
+      providerConfig: state.providerConfig
+    });
+
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+
+    updateProviderStatus("AI-провайдер працює", "success");
+  } catch (error) {
+    updateProviderStatus(error.message || "Перевірка не вдалася.", "error");
+  }
+}
+
+async function clearProviderSettings() {
+  state.providerConfig = { ...DEFAULT_PROVIDER_CONFIG };
+
+  await chrome.storage.local.set({
+    providerConfig: state.providerConfig
+  });
+
+  renderProviderSettings();
+}
+
+function updateProviderStatus(text, type = "") {
+  if (!els.providerStatus) {
+    return;
+  }
+
+  els.providerStatus.textContent = text;
+  els.providerStatus.className = "provider-status " + type;
+}
+
+function renderChat() {
+  const chat = getCurrentChat();
+
+  if (!chat) {
+    return;
+  }
+
+  if (els.currentChatTitle) {
+    els.currentChatTitle.textContent = chat.title || "Новий чат";
+  }
+
+  if (!els.chatMessages) {
+    return;
+  }
+
+  els.chatMessages.innerHTML = "";
+
+  chat.messages.forEach((message) => {
+    const bubble = document.createElement("div");
+    bubble.className =
+      "message " + (message.sender === "user" ? "user" : "assistant");
+
+    const text = document.createElement("div");
+    text.textContent = message.text || "";
+
+    const time = document.createElement("span");
+    time.className = "message-time";
+    time.textContent = message.time || "";
+
+    bubble.appendChild(text);
+    bubble.appendChild(time);
+
+    els.chatMessages.appendChild(bubble);
+  });
+
+  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+}
+
+function renderContextChips() {
+  if (!els.contextChips) {
+    return;
+  }
+
+  const chat = getCurrentChat();
+  const attachedSets = getAttachedQuestionSets(chat);
+
+  els.contextChips.innerHTML = "";
+
+  attachedSets.forEach((set) => {
+    const chip = document.createElement("div");
+    chip.className = "context-chip";
+
+    const label = document.createElement("span");
+    label.textContent = getQuestionSetDisplayTitle(set);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+
+    remove.addEventListener("click", () => {
+      detachQuestionSetFromPrompt(set.id);
+    });
+
+    chip.appendChild(label);
+    chip.appendChild(remove);
+
+    els.contextChips.appendChild(chip);
+  });
+}
+
+function renderFiles() {
+  if (!els.fileChips) {
+    return;
+  }
+
+  els.fileChips.innerHTML = "";
+
+  state.pendingFiles.forEach((item) => {
+    const chip = document.createElement("div");
+    chip.className = "file-chip";
+
+    const imageCount = Array.isArray(item.images) ? item.images.length : 0;
+    const imageInfo = imageCount ? ` · ${imageCount} фото` : "";
+
+    const name = document.createElement("span");
+    name.textContent = `${item.name} · ${formatBytes(item.size)}${imageInfo}`;
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+
+    remove.addEventListener("click", () => {
+      state.pendingFiles = state.pendingFiles.filter((file) => file.id !== item.id);
+      renderFiles();
+    });
+
+    chip.appendChild(name);
+    chip.appendChild(remove);
+
+    els.fileChips.appendChild(chip);
+  });
+}
+
+function toggleAttachMenu() {
+  if (!els.attachMenu) {
+    return;
+  }
+
+  els.attachMenu.classList.toggle("hidden");
+
+  if (!els.attachMenu.classList.contains("hidden")) {
+    renderAttachMenu();
+  }
+}
+
+function hideAttachMenu() {
+  els.attachMenu?.classList.add("hidden");
+}
+
+function renderAttachMenu() {
+  if (!els.attachTestSetList) {
+    return;
+  }
+
+  const chat = getCurrentChat();
+  const sets = getQuestionSets(chat);
+
+  els.attachTestSetList.innerHTML = "";
+
+  if (!sets.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "Тестів ще немає.";
+    els.attachTestSetList.appendChild(empty);
+    return;
+  }
+
+  sets.forEach((set, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "attach-test-set-item";
+
+    const title = document.createElement("div");
+    title.className = "attach-test-set-item-title";
+    title.textContent = formatQuestionSetDisplayTitle(set, index);
+
+    const meta = document.createElement("div");
+    meta.className = "attach-test-set-item-meta";
+
+    const date = new Date(set.createdAt);
+
+    meta.textContent =
+      `${set.questions.length} питань · ` +
+      date.toLocaleDateString();
+
+    button.appendChild(title);
+    button.appendChild(meta);
+
+    button.addEventListener("click", () => {
+      attachQuestionSetToPrompt(set.id);
+      hideAttachMenu();
+    });
+
+    els.attachTestSetList.appendChild(button);
+  });
+}
+
+function renderHistory() {
+  if (!els.historyList) {
+    return;
+  }
+
+  const monthFilter = els.historyMonthFilter?.value || "";
+
+  const chats = state.chats.filter((chat) => {
+    return matchesMonth(chat.createdAt, monthFilter);
+  });
+
+  els.historyList.innerHTML = "";
+
+  if (!chats.length) {
+    els.historyList.innerHTML = `<div class="empty">Історія порожня.</div>`;
+    return;
+  }
+
+  chats.forEach((chat) => {
+    const item = document.createElement("div");
+    item.className = "history-item";
+
+    const info = document.createElement("div");
+
+    const title = document.createElement("div");
+    title.className = "history-title";
+    title.textContent = chat.title || "Новий чат";
+
+    const meta = document.createElement("div");
+    meta.className = "history-meta";
+
+    const questionCount = getQuestionSets(chat).reduce((total, set) => {
+      return total + (Array.isArray(set.questions) ? set.questions.length : 0);
+    }, 0);
+
+    meta.textContent =
+      `${chat.messages.length} повідомлень · ${questionCount} питань`;
+
+    info.appendChild(title);
+    info.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "history-actions";
+
+    actions.appendChild(
+      makeSmallButton("Відкрити", async () => {
+        state.currentChatId = chat.id;
+        await saveChats();
+        switchPage("chat");
+      })
+    );
+
+    actions.appendChild(
+      makeSmallButton("Rename", async () => {
+        const titleValue = prompt("Назва чату:", chat.title || "Новий чат");
+
+        if (titleValue && titleValue.trim()) {
+          chat.title = titleValue.trim();
+          await saveChats();
+          renderAll();
+        }
+      })
+    );
+
+    actions.appendChild(
+      makeSmallButton("Delete", async () => {
+        if (state.chats.length === 1) {
+          const replacement = makeChat();
+          state.chats = [replacement];
+          state.currentChatId = replacement.id;
+        } else {
+          state.chats = state.chats.filter((storedChat) => {
+            return storedChat.id !== chat.id;
+          });
+
+          if (state.currentChatId === chat.id) {
+            state.currentChatId = state.chats[0].id;
+          }
+        }
+
+        await saveChats();
+        renderAll();
+      })
+    );
+
+    item.appendChild(info);
+    item.appendChild(actions);
+
+    els.historyList.appendChild(item);
+  });
+}
+
+function makeSmallButton(text, handler) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "small-btn";
+  button.textContent = text;
+  button.addEventListener("click", handler);
+  return button;
+}
+
+function renderQuestions() {
+  const chat = getCurrentChat();
+  const monthFilter = els.questionMonthFilter?.value || "";
+
+  const sets = getQuestionSets(chat).filter((set) => {
+    return matchesMonth(set.createdAt, monthFilter);
+  });
+
+  if (els.questionSetList) {
+    els.questionSetList.innerHTML = "";
+
+    if (!sets.length) {
+      els.questionSetList.innerHTML =
+        `<div class="empty">Тести ще не створено.</div>`;
+    }
+
+    sets.forEach((set, index) => {
+      const card = document.createElement("div");
+
+      card.className =
+        "question-set-card " +
+        (set.id === chat.selectedQuestionSetId ? "active" : "");
+
+      const title = document.createElement("div");
+      title.className = "question-set-title";
+      title.textContent = formatQuestionSetDisplayTitle(set, index);
+
+      const meta = document.createElement("div");
+      meta.className = "question-set-meta";
+
+      const date = new Date(set.createdAt);
+      const insertedText = set.lastInsertion?.undoToken ? " · вставлено" : "";
+
+      meta.textContent = date.toLocaleDateString() + insertedText;
+
+      const actions = document.createElement("div");
+      actions.className = "question-set-actions";
+
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.textContent = "Відкрити";
+
+      openBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        await selectQuestionSet(set.id);
+      });
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.textContent = "Видалити";
+
+      deleteBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
+
+        if (set.lastInsertion?.undoToken) {
+          alert(
+            "Спочатку натисніть «Скасувати», щоб видалити вставлені питання з НаУрок."
+          );
+          return;
+        }
+
+        chat.questionSets = chat.questionSets.filter((item) => {
+          return item.id !== set.id;
+        });
+
+        if (chat.selectedQuestionSetId === set.id) {
+          chat.selectedQuestionSetId = chat.questionSets[0]?.id || "";
+        }
+
+        chat.attachedQuestionSetIds = (chat.attachedQuestionSetIds || []).filter(
+          (id) => id !== set.id
+        );
+
+        chat.questions = getSelectedQuestions(chat);
+
+        await saveChats();
+        renderAll();
+      });
+
+      actions.appendChild(openBtn);
+      actions.appendChild(deleteBtn);
+
+      card.appendChild(title);
+      card.appendChild(meta);
+      card.appendChild(actions);
+
+      card.addEventListener("click", async () => {
+        await selectQuestionSet(set.id);
+      });
+
+      els.questionSetList.appendChild(card);
+    });
+  }
+
+  const selectedSet = getSelectedQuestionSet(chat);
+  const questions = selectedSet?.questions || [];
+
+  if (els.questionCountView) {
+    els.questionCountView.textContent = String(questions.length);
+  }
+
+  if (!els.questionsList) {
+    return;
+  }
+
+  els.questionsList.innerHTML = "";
+
+  if (!questions.length) {
+    els.questionsList.innerHTML =
+      `<div class="empty">Питання ще не згенеровано.</div>`;
+    return;
+  }
+
+  questions.forEach((question, index) => {
+    const card = document.createElement("div");
+    card.className = "question-card";
+
+    const title = document.createElement("h3");
+    title.textContent = `${index + 1}. ${question.question}`;
+
+    card.appendChild(title);
+
+    if (question.image) {
+      const image = document.createElement("img");
+      image.src = question.image;
+      image.alt = "Зображення до питання";
+      card.appendChild(image);
+    }
+
+    const difficulty = document.createElement("div");
+    difficulty.className = "question-difficulty";
+    difficulty.textContent = getDifficultyLabel(question.difficulty);
+
+    card.appendChild(difficulty);
+
+    const list = document.createElement("ol");
+    const correct = Array.isArray(question.correct) ? question.correct : [];
+
+    (question.answers || []).forEach((answer, answerIndex) => {
+      const li = document.createElement("li");
+      li.className = correct.includes(answerIndex) ? "correct" : "";
+      li.textContent =
+        typeof answer === "string" ? answer : answer?.text || "Варіант";
+      list.appendChild(li);
+    });
+
+    card.appendChild(list);
+    els.questionsList.appendChild(card);
+  });
+}
+
+async function selectQuestionSet(setId) {
+  const chat = getCurrentChat();
+
+  if (!chat) {
+    return;
+  }
+
+  const set = getQuestionSets(chat).find((item) => item.id === setId);
+
+  if (!set) {
+    return;
+  }
+
+  chat.selectedQuestionSetId = set.id;
+  chat.questions = set.questions;
+
+  await saveChats();
+  renderAll();
+}
+
+function getDifficultyLabel(difficulty) {
+  const value = String(difficulty || "").toLowerCase();
+
+  if (value === "easy") {
+    return "Складність: легка";
+  }
+
+  if (value === "hard") {
+    return "Складність: складна";
+  }
+
+  return "Складність: середня";
+}
+
+function renderInsertActions() {
+  const chat = getCurrentChat();
+  const selectedSet = getSelectedQuestionSet(chat);
+
+  const questionCount = Array.isArray(selectedSet?.questions)
+    ? selectedSet.questions.length
+    : 0;
+
+  const hasInsertion = Boolean(selectedSet?.lastInsertion?.undoToken);
+
+  if (els.insertBtn) {
+    els.insertBtn.disabled =
+      state.isProcessing || questionCount === 0 || hasInsertion;
+
+    els.insertBtn.textContent = hasInsertion
+      ? "Вже вставлено"
+      : "Вставити в НаУрок";
+  }
+
+  if (els.cancelInsertBtn) {
+    els.cancelInsertBtn.classList.toggle("hidden", !hasInsertion);
+    els.cancelInsertBtn.disabled = state.isProcessing;
+  }
+}
+
+async function handleFileSelection(event) {
+  const files = Array.from(event.target.files || []);
+  event.target.value = "";
+
+  if (!files.length) {
+    return;
+  }
+
+  const availableSlots = Math.max(0, MAX_FILES - state.pendingFiles.length);
+  const selected = files.slice(0, availableSlots);
+
+  if (!selected.length) {
+    showStatus(`Можна додати максимум ${MAX_FILES} файли.`, "warning");
+    return;
+  }
+
+  for (const file of selected) {
+    if (file.size > MAX_FILE_SIZE) {
+      showStatus(
+        `Файл "${file.name}" занадто великий. Максимум 20 MB.`,
+        "error"
+      );
+      continue;
+    }
+
+    const item = {
+      id:
+        "file_" +
+        Date.now() +
+        "_" +
+        Math.floor(Math.random() * 10000),
+      name: file.name,
+      size: file.size,
+      type: file.type || "application/octet-stream",
+      text: "",
+      images: [],
+      file
+    };
+
+    state.pendingFiles.push(item);
+    renderFiles();
+
+    try {
+      showStatus(`Обробка "${file.name}"...`);
+
+      const content = await extractContentFromFile(file, item.id);
+
+      item.text = content.text || "";
+      item.images = Array.isArray(content.images) ? content.images : [];
+
+      showStatus(`Файл "${file.name}" прочитано.`, "success");
+    } catch (error) {
+      state.pendingFiles = state.pendingFiles.filter((stored) => {
+        return stored.id !== item.id;
+      });
+
+      showStatus(
+        `Не вдалося прочитати "${file.name}": ${error.message}`,
+        "error"
+      );
+    }
+
+    renderFiles();
+  }
+}
+
+async function extractContentFromFile(file, fileId) {
+  const extension = file.name.split(".").pop().toLowerCase();
+
+  if (["png", "jpg", "jpeg", "webp"].includes(extension)) {
+    const image = await readImageFileAsSource(file, fileId);
+
+    return {
+      text: `[Зображення: ${file.name}]`,
+      images: [image]
+    };
+  }
+
+  return {
+    text: await extractTextFromFile(file),
+    images: []
+  };
+}
+
+async function extractTextFromFile(file) {
+  const extension = file.name.split(".").pop().toLowerCase();
+
+  if (extension === "txt") {
+    return await readTextFile(file);
+  }
+
+  if (extension === "pdf") {
+    return await readPdfFile(file);
+  }
+
+  if (extension === "docx") {
+    return await readDocxFile(file);
+  }
+
+  if (extension === "doc") {
+    throw new Error(
+      "Формат .doc не підтримується. Збережіть документ як .docx."
+    );
+  }
+
+  throw new Error(`Формат .${extension} не підтримується.`);
+}
+
+function readTextFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      resolve(String(event.target.result || ""));
+    };
+
+    reader.onerror = () => {
+      reject(new Error("Не вдалося прочитати текстовий файл."));
+    };
+
+    reader.readAsText(file);
+  });
+}
+
+async function readPdfFile(file) {
+  if (typeof pdfjsLib === "undefined") {
+    throw new Error("PDF.js не завантажено.");
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+
+  const pdf = await pdfjsLib.getDocument({
+    data: arrayBuffer
+  }).promise;
+
+  let fullText = "";
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+
+    const pageText = content.items.map((item) => item.str).join(" ");
+
+    fullText += `\n\n[Сторінка ${pageNumber}]\n${pageText}`;
+  }
+
+  return fullText.trim();
+}
+
+async function readDocxFile(file) {
+  if (typeof JSZip === "undefined") {
+    throw new Error("JSZip не завантажено. Додайте lib/jszip.min.js.");
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  const xmlFile = zip.file("word/document.xml");
+
+  if (!xmlFile) {
+    throw new Error("Не знайдено word/document.xml.");
+  }
+
+  const xml = await xmlFile.async("text");
+
+  return extractTextFromXml(xml);
+}
+
+function extractTextFromXml(xml) {
+  const parser = new DOMParser();
+
+  const documentXml = parser.parseFromString(xml, "application/xml");
+
+  const paragraphs = Array.from(documentXml.getElementsByTagName("w:p"));
+
+  if (paragraphs.length) {
+    return paragraphs
+      .map((paragraph) => {
+        return Array.from(paragraph.getElementsByTagName("w:t"))
+          .map((node) => node.textContent || "")
+          .join("");
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  return Array.from(documentXml.getElementsByTagName("w:t"))
+    .map((node) => node.textContent || "")
+    .join(" ")
+    .trim();
+}
+
+function readImageFileAsSource(file, fileId) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      const image = new Image();
+
+      image.onload = () => {
+        const compressed = compressLoadedImage(
+          image,
+          file.type || "image/jpeg"
+        );
+
+        resolve({
+          id: `${fileId}_image_1`,
+          fileName: file.name,
+          page: 0,
+          mimeType: compressed.mimeType,
+          dataUrl: compressed.dataUrl,
+          width: compressed.width,
+          height: compressed.height
+        });
+      };
+
+      image.onerror = () => {
+        reject(new Error("Не вдалося прочитати зображення."));
+      };
+
+      image.src = dataUrl;
+    };
+
+    reader.onerror = () => {
+      reject(new Error("Не вдалося прочитати зображення."));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+function compressLoadedImage(image, originalMimeType) {
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+
+  const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(width, height));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+
+  const context = canvas.getContext("2d", { alpha: false });
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  const mimeType = originalMimeType === "image/png" ? "image/png" : "image/jpeg";
+
+  const dataUrl = canvas.toDataURL(
+    mimeType,
+    mimeType === "image/jpeg" ? 0.82 : undefined
+  );
+
+  return {
+    mimeType,
+    dataUrl,
+    width: canvas.width,
+    height: canvas.height
+  };
+}
+
+async function handleSend() {
+  if (state.isProcessing) {
+    return;
+  }
+
+  const typedPrompt = els.promptInput?.value.trim() || "";
+  const chat = getCurrentChat();
+
+  if (!chat) {
+    return;
+  }
+
+  if (!typedPrompt && !state.pendingFiles.length && !getAttachedQuestionSets(chat).length) {
+    return;
+  }
+
+  const attachedFiles = state.pendingFiles.slice();
+  const attachedSets = getAttachedQuestionSets(chat);
+
+  const fileNames = attachedFiles.map((file) => file.name).join(", ");
+  const attachedSetNames = attachedSets
+    .map((set) => getQuestionSetDisplayTitle(set))
+    .join(", ");
+
+  let userText = typedPrompt;
+
+  if (fileNames) {
+    userText = userText
+      ? `${userText}\n\nФайли: ${fileNames}`
+      : `Файли: ${fileNames}`;
+  }
+
+  if (attachedSetNames) {
+    userText = userText
+      ? `${userText}\n\nТести у запиті: ${attachedSetNames}`
+      : `Тести у запиті: ${attachedSetNames}`;
+  }
+
+  chat.messages.push({
+    sender: "user",
+    text: userText,
+    time: nowTime()
+  });
+
+  chat.files = [
+    ...chat.files,
+    ...attachedFiles.map(({ file, ...storedFile }) => storedFile)
+  ];
+
+  if (chat.title === "Новий чат" && typedPrompt) {
+    chat.title =
+      typedPrompt.length > 45 ? typedPrompt.slice(0, 45) + "..." : typedPrompt;
+  }
+
+  state.pendingFiles = [];
+
+  if (els.promptInput) {
+    els.promptInput.value = "";
+  }
+
+  autoResizePrompt();
+
+  await saveChats();
+  renderAll();
+
+  if (!state.providerConfig.apiKey) {
+    chat.messages.push({
+      sender: "assistant",
+      text: "Спочатку відкрийте вкладку AI-провайдер і додайте API ключ.",
+      time: nowTime()
+    });
+
+    await saveChats();
+    renderAll();
+    return;
+  }
+
+  const replaceExisting = shouldReplaceAttachedSet(typedPrompt, attachedSets);
+
+  if (replaceExisting && attachedSets[0]?.lastInsertion?.undoToken) {
+    chat.messages.push({
+      sender: "assistant",
+      text:
+        "Спочатку натисніть «Скасувати» для вставленого тесту, а потім змінюйте його питання.",
+      time: nowTime()
+    });
+
+    await saveChats();
+    renderAll();
+    return;
+  }
+
+  const material = chat.files
+    .map((file) => {
+      return `\n\n[Файл: ${file.name}]\n${String(file.text || "")}`;
+    })
+    .join("")
+    .trim();
+
+  const currentQuestions = attachedSets.length
+    ? attachedSets.flatMap((set) => {
+        return set.questions.map((question, index) => {
+          return {
+            ...question,
+            sourceTestTitle: set.title,
+            sourceQuestionNumber: index + 1
+          };
+        });
+      })
+    : getSelectedQuestions(chat);
+
+  const promptForApi =
+    typedPrompt || "Створи питання за завантаженими матеріалами.";
+
+  if (!material && !typedPrompt && !currentQuestions.length) {
+    chat.messages.push({
+      sender: "assistant",
+      text: "Додайте матеріали або напишіть детальніший запит.",
+      time: nowTime()
+    });
+
+    await saveChats();
+    renderAll();
+    return;
+  }
+
+  const questionCount =
+    detectQuestionCount(typedPrompt) ||
+    (replaceExisting && attachedSets[0]?.questions?.length) ||
+    currentQuestions.length ||
+    10;
+
+  const sourceImages = collectSourceImages(chat);
+  const useImageInputs = shouldUseImages(typedPrompt);
+
+  state.isProcessing = true;
+  renderProcessing(true);
+
+  setProgress(
+    15,
+    currentQuestions.length
+      ? "Редагування питань через AI..."
+      : "Генерація питань через AI..."
+  );
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: "generateQuestions",
+      providerConfig: state.providerConfig,
+      material,
+      prompt: promptForApi,
+      questionCount,
+      questionTypes: "all",
+      currentQuestions,
+      sourceImages,
+      useImageInputs
+    });
+
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+
+    const questions = Array.isArray(response?.questions)
+      ? response.questions
+      : [];
+
+    if (!questions.length) {
+      throw new Error("AI не повернув питання.");
+    }
+
+    const titleFromAi =
+      response?.title ||
+      makeFallbackTestTitle(questions.length, typedPrompt, material);
+
+    let activeSet = null;
+
+    if (replaceExisting) {
+      activeSet = attachedSets[0];
+      activeSet.title = titleFromAi;
+      activeSet.questions = questions;
+      activeSet.prompt = promptForApi;
+      activeSet.updatedAt = new Date().toISOString();
+      activeSet.lastInsertion = null;
+    } else {
+      activeSet = makeQuestionSet({
+        title: titleFromAi,
+        questions,
+        prompt: promptForApi
+      });
+
+      chat.questionSets.unshift(activeSet);
+    }
+
+    chat.selectedQuestionSetId = activeSet.id;
+    chat.questions = activeSet.questions;
+    chat.attachedQuestionSetIds = [];
+
+    chat.messages.push({
+      sender: "assistant",
+      text: replaceExisting
+        ? `Готово. Оновлено тест: ${getQuestionSetDisplayTitle(activeSet)}.`
+        : `Готово. Створено новий тест: ${getQuestionSetDisplayTitle(activeSet)}.`,
+      time: nowTime()
+    });
+
+    setProgress(100, "Питання готові");
+
+    showStatus(`Підготовлено ${questions.length} питань.`, "success");
+
+    await saveChats();
+    renderAll();
+
+    switchPage("questions");
+  } catch (error) {
+    chat.messages.push({
+      sender: "assistant",
+      text: `Помилка: ${error.message}`,
+      time: nowTime()
+    });
+
+    showStatus(error.message, "error");
+
+    await saveChats();
+    renderAll();
+  } finally {
+    state.isProcessing = false;
+    renderProcessing(false);
+    renderInsertActions();
+
+    setTimeout(() => {
+      els.progressContainer?.classList.add("hidden");
+    }, 2500);
+  }
+}
+
+async function insertCurrentQuestions() {
+  if (state.isProcessing) {
+    return;
+  }
+
+  const chat = getCurrentChat();
+  const selectedSet = getSelectedQuestionSet(chat);
+
+  const questions = Array.isArray(selectedSet?.questions)
+    ? selectedSet.questions
+    : [];
+
+  if (!questions.length) {
+    showStatus("У вибраному тесті немає питань.", "warning");
+    return;
+  }
+
+  if (selectedSet.lastInsertion?.undoToken) {
+    showStatus(
+      "Цей тест вже вставлено. Спочатку натисніть «Скасувати».",
+      "warning"
+    );
+    return;
+  }
+
+  const tab = await getNaurokActiveTab();
+
+  if (!tab) {
+    showStatus("Відкрийте сторінку конструктора тестів НаУрок.", "error");
+    await checkActiveTab();
+    return;
+  }
+
+  state.isProcessing = true;
+  renderProcessing(true);
+  renderInsertActions();
+
+  setProgress(15, "Підготовка вставки...");
+
+  try {
+    setProgress(35, "Вставка питань у НаУрок...");
+
+    const result = await sendMessageToNaurokTab(tab.id, {
+      action: "insertQuestions",
+      questions
+    });
+
+    if (!result?.undoToken) {
+      throw new Error(
+        "Питання вставлено, але не отримано дані для скасування."
+      );
+    }
+
+    selectedSet.lastInsertion = {
+      undoToken: result.undoToken,
+      count: Number(result.count || questions.length),
+      tabId: tab.id,
+      tabUrl: tab.url || "",
+      insertedAt: new Date().toISOString()
+    };
+
+    chat.questions = selectedSet.questions;
+
+    await saveChats();
+
+    setProgress(100, "Питання вставлено");
+
+    showStatus(
+      `Вставлено ${selectedSet.lastInsertion.count} питань. Для видалення натисніть «Скасувати».`,
+      "success"
+    );
+
+    renderAll();
+  } catch (error) {
+    showStatus(error.message || "Не вдалося вставити питання.", "error");
+  } finally {
+    state.isProcessing = false;
+    renderProcessing(false);
+    renderInsertActions();
+
+    setTimeout(() => {
+      els.progressContainer?.classList.add("hidden");
+    }, 2500);
+  }
+}
+
+async function cancelLastInsertion() {
+  if (state.isProcessing) {
+    return;
+  }
+
+  const chat = getCurrentChat();
+  const selectedSet = getSelectedQuestionSet(chat);
+  const insertion = selectedSet?.lastInsertion;
+
+  if (!insertion?.undoToken) {
+    showStatus("Немає вставлених питань для скасування.", "warning");
+    return;
+  }
+
+  const tab = await findInsertionTab(insertion);
+
+  if (!tab) {
+    showStatus(
+      "Відкрийте той самий конструктор НаУрок, куди були вставлені питання.",
+      "error"
+    );
+    return;
+  }
+
+  state.isProcessing = true;
+  renderProcessing(true);
+  renderInsertActions();
+
+  setProgress(20, "Видалення вставлених питань...");
+
+  try {
+    const result = await sendMessageToNaurokTab(tab.id, {
+      action: "cancelInsertedQuestions",
+      undoToken: insertion.undoToken
+    });
+
+    const deletedCount = Number(result?.count || insertion.count || 0);
+
+    selectedSet.lastInsertion = null;
+
+    await saveChats();
+
+    setProgress(100, "Скасовано");
+
+    showStatus(`Видалено ${deletedCount} вставлених питань.`, "success");
+
+    renderAll();
+  } catch (error) {
+    showStatus(
+      error.message || "Не вдалося видалити вставлені питання.",
+      "error"
+    );
+  } finally {
+    state.isProcessing = false;
+    renderProcessing(false);
+    renderInsertActions();
+
+    setTimeout(() => {
+      els.progressContainer?.classList.add("hidden");
+    }, 2500);
+  }
+}
+
+function sendMessageToNaurokTab(tabId, message) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      const runtimeError = chrome.runtime.lastError;
+
+      if (runtimeError) {
+        reject(
+          new Error(
+            "Content script не відповідає. Оновіть сторінку НаУрок після перезавантаження розширення."
+          )
+        );
+        return;
+      }
+
+      if (!response) {
+        reject(new Error("Сторінка НаУрок не повернула відповідь."));
+        return;
+      }
+
+      if (response.error || response.success === false) {
+        reject(new Error(response.error || "Операція не виконана."));
+        return;
+      }
+
+      resolve(response);
+    });
+  });
+}
+
+async function getNaurokActiveTab() {
+  const tabs = await chrome.tabs.query({
+    currentWindow: true
+  });
+
+  const activeBuilder = tabs.find((tab) => {
+    return tab.active && isNaurokBuilderUrl(tab.url);
+  });
+
+  if (activeBuilder) {
+    return activeBuilder;
+  }
+
+  return tabs.find((tab) => isNaurokBuilderUrl(tab.url)) || null;
+}
+
+async function findInsertionTab(insertion) {
+  const tabs = await chrome.tabs.query({
+    currentWindow: true
+  });
+
+  if (insertion.tabId) {
+    const sameTab = tabs.find((tab) => {
+      return tab.id === insertion.tabId && isNaurokBuilderUrl(tab.url);
+    });
+
+    if (sameTab) {
+      return sameTab;
+    }
+  }
+
+  if (insertion.tabUrl) {
+    const sameUrl = tabs.find((tab) => {
+      return tab.url === insertion.tabUrl;
+    });
+
+    if (sameUrl) {
+      return sameUrl;
+    }
+  }
+
+  return tabs.find((tab) => isNaurokBuilderUrl(tab.url)) || null;
+}
+
+function isNaurokBuilderUrl(url) {
+  return String(url || "").includes("naurok.com.ua/test/builder");
+}
+
+function attachQuestionSetToPrompt(setId) {
+  const chat = getCurrentChat();
+
+  if (!chat) {
+    return;
+  }
+
+  if (!Array.isArray(chat.attachedQuestionSetIds)) {
+    chat.attachedQuestionSetIds = [];
+  }
+
+  if (!chat.attachedQuestionSetIds.includes(setId)) {
+    chat.attachedQuestionSetIds.push(setId);
+  }
+
+  saveChats();
+  renderAll();
+}
+
+function detachQuestionSetFromPrompt(setId) {
+  const chat = getCurrentChat();
+
+  if (!chat) {
+    return;
+  }
+
+  chat.attachedQuestionSetIds = (chat.attachedQuestionSetIds || []).filter(
+    (id) => id !== setId
+  );
+
+  saveChats();
+  renderAll();
+}
+
+function shouldReplaceAttachedSet(promptText, attachedSets) {
+  if (attachedSets.length !== 1) {
+    return false;
+  }
+
+  const text = String(promptText || "").toLowerCase();
+
+  return [
+    "заміни",
+    "замінити",
+    "перепиши",
+    "онови",
+    "зміни",
+    "змінити",
+    "поміняй",
+    "замість",
+    "replace",
+    "rewrite",
+    "update",
+    "change",
+    "instead",
+    "değiştir",
+    "yerine",
+    "başka",
+    "farklı"
+  ].some((word) => text.includes(word));
+}
+
+function getQuestionSetTopic(set) {
+  const title = String(set?.title || "").trim();
+
+  const cleaned = title
+    .replace(/^Тести\s+\d+\s+питань\s*[—-]?\s*/i, "")
+    .replace(/^Тест\s+\d+\s*[·\-—]\s*\d+\s+питань\s*[—-]?\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned || "Навчальний тест";
+}
+
+function getQuestionSetDisplayTitle(set) {
+  const allSets = getQuestionSets();
+  const index = Math.max(0, allSets.findIndex((item) => item.id === set?.id));
+  return formatQuestionSetDisplayTitle(set, index);
+}
+
+function formatQuestionSetDisplayTitle(set, index) {
+  const count = Array.isArray(set?.questions) ? set.questions.length : 0;
+  return `Тест ${index + 1} · ${count} питань — ${getQuestionSetTopic(set)}`;
+}
+
+function collectSourceImages(chat) {
+  const result = [];
+  const usedIds = new Set();
+
+  for (const file of chat.files || []) {
+    for (const image of file.images || []) {
+      if (!image?.id || !image?.dataUrl || usedIds.has(image.id)) {
+        continue;
+      }
+
+      usedIds.add(image.id);
+      result.push(image);
+
+      if (result.length >= MAX_IMAGES_FOR_AI) {
+        return result;
+      }
+    }
+  }
+
+  return result;
+}
+
+function shouldUseImages(promptText) {
+  const text = String(promptText || "").toLowerCase();
+
+  return [
+    "зображ",
+    "фото",
+    "картин",
+    "ілюстрац",
+    "малюн",
+    "схем",
+    "карта",
+    "діаграм",
+    "image",
+    "picture",
+    "photo",
+    "foto",
+    "resim",
+    "görsel"
+  ].some((word) => text.includes(word));
+}
+
+function createNewChat() {
+  const chat = makeChat();
+
+  state.chats.unshift(chat);
+  state.currentChatId = chat.id;
+
+  saveChats();
+  switchPage("chat");
+}
+
+function detectQuestionCount(promptText) {
+  const text = String(promptText || "");
+
+  const patterns = [
+    /(?:створи|зроби|згенеруй|підготуй)\s+(\d{1,2})\s+(?:питань|запитань)/i,
+    /(\d{1,2})\s+(?:питань|запитань)\b/i,
+    /(?:create|generate|make)\s+(\d{1,2})\s+questions?/i,
+    /(\d{1,2})\s+questions?\b/i,
+    /(?:oluştur|hazırla|yaz)\s+(\d{1,2})\s+soru/i,
+    /(\d{1,2})\s+(?:soru|soruluk)\b/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+
+    if (!match) {
+      continue;
+    }
+
+    const count = Number(match[1]);
+
+    if (count >= 1 && count <= 30) {
+      return count;
+    }
+  }
+
+  return null;
+}
+
+function makeFallbackTestTitle(count, promptText, materialText) {
+  const prompt = String(promptText || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (prompt) {
+    return `Тести ${count} питань — ${prompt.slice(0, 52)}`;
+  }
+
+  const firstMeaningfulLine = String(materialText || "")
+    .split(/\n+/)
+    .map((line) => line.replace(/^\[.*?\]/, "").trim())
+    .find((line) => line.length > 8);
+
+  if (firstMeaningfulLine) {
+    return `Тести ${count} питань — ${firstMeaningfulLine.slice(0, 52)}`;
+  }
+
+  return `Тести ${count} питань — Навчальний тест`;
+}
+
+function matchesMonth(isoDate, monthValue) {
+  if (!monthValue) {
+    return true;
+  }
+
+  const date = new Date(isoDate);
+
+  if (Number.isNaN(date.getTime())) {
+    return true;
+  }
+
+  const value =
+    date.getFullYear() +
+    "-" +
+    String(date.getMonth() + 1).padStart(2, "0");
+
+  return value === monthValue;
+}
+
+function renderProcessing(processing) {
+  state.isProcessing = processing;
+
+  if (els.sendBtn) {
+    els.sendBtn.disabled = processing;
+  }
+
+  if (els.attachBtn) {
+    els.attachBtn.disabled = processing;
+  }
+
+  if (els.promptInput) {
+    els.promptInput.disabled = processing;
+  }
+
+  if (els.insertBtn) {
+    els.insertBtn.disabled = processing;
+  }
+
+  if (els.cancelInsertBtn) {
+    els.cancelInsertBtn.disabled = processing;
+  }
+}
+
+function setProgress(percent, text) {
+  els.progressContainer?.classList.remove("hidden");
+
+  if (els.progressFill) {
+    els.progressFill.style.width = percent + "%";
+  }
+
+  if (els.progressText) {
+    els.progressText.textContent = text;
+  }
+}
+
+function showStatus(message, type = "") {
+  if (!els.status) {
+    return;
+  }
+
+  els.status.textContent = message;
+  els.status.className = "status " + type;
+}
+
+function autoResizePrompt() {
+  if (!els.promptInput) {
+    return;
+  }
+
+  els.promptInput.style.height = "auto";
+
+  els.promptInput.style.height =
+    Math.min(els.promptInput.scrollHeight, 120) + "px";
+}
+
+function formatBytes(size) {
+  const value = Number(size || 0);
+
+  if (value < 2048) {
+    return value + " B";
+  }
+
+  if (value < 2048 * 2048) {
+    return Math.round(value / 2048) + " KB";
+  }
+
+  return (value / (2048 * 2048)).toFixed(1) + " MB";
+}

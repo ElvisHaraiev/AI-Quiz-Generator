@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Naurok AI</title>
+  <link rel="stylesheet" href="popup.css">
+  <script src="lib/pdf.min.js"></script>
+  <script src="lib/jszip.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">▲</div>
+        <div>
+          <h1>Naurok AI</h1>
+          <p>Генератор питань</p>
+        </div>
+      </div>
+
+      <button id="newChatBtn" class="new-chat-btn" type="button">+ Новий чат</button>
+
+      <nav class="nav">
+        <button class="nav-btn active" type="button" data-page="chat">Чат</button>
+        <button class="nav-btn" type="button" data-page="history">Історія</button>
+        <button class="nav-btn" type="button" data-page="questions">Питання</button>
+        <button class="nav-btn" type="button" data-page="settings">AI-провайдер</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div id="siteStatus" class="site-status">Сторінка НаУрок: перевірка...</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section id="page-chat" class="page">
+        <header class="page-header">
+          <div>
+            <h2 id="currentChatTitle">Новий чат</h2>
+            <p>Додайте матеріали через + або напишіть запит.</p>
+          </div>
+        </header>
+
+        <div id="chatMessages" class="chat-messages"></div>
+        <div id="fileChips" class="file-chips"></div>
+
+        <div class="composer">
+          <input id="fileInput" type="file" accept=".txt,.pdf,.doc,.docx" multiple hidden>
+          <button id="attachBtn" class="attach-btn" type="button">+</button>
+          <textarea id="promptInput" class="prompt-input" rows="1" placeholder="Напишіть запит... наприклад: створи 10 питань за матеріалами"></textarea>
+          <button id="sendBtn" class="send-btn" type="button">Надіслати</button>
+        </div>
+
+        <div id="status" class="status"></div>
+
+        <div id="progressContainer" class="progress-container hidden">
+          <div class="progress-bar">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+          <div id="progressText" class="progress-text">Обробка...</div>
+        </div>
+      </section>
+
+      <section id="page-history" class="page hidden">
+        <header class="page-header">
+          <h2>Історія чатів</h2>
+        </header>
+        <div id="historyList" class="history-list"></div>
+      </section>
+
+      <section id="page-questions" class="page hidden">
+        <header class="page-header">
+          <div>
+            <h2>Питання</h2>
+            <p><span id="questionCountView">0</span> питань у поточному чаті</p>
+          </div>
+          <button id="insertBtn" class="secondary-btn" type="button">Вставити в НаУрок</button>
+        </header>
+        <div id="questionsList" class="questions-list"></div>
+      </section>
+
+      <section id="page-settings" class="page hidden">
+        <header class="page-header">
+          <h2>AI-провайдер</h2>
+        </header>
+
+        <div class="settings-card">
+          <label class="field">
+            <span>Провайдер</span>
+            <select id="providerSelect">
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+              <option value="manus">Manus</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>API ключ</span>
+            <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Вставте API ключ">
+          </label>
+
+          <label class="field">
+            <span>Модель</span>
+            <input id="modelInput" type="text" placeholder="gpt-4o-mini">
+          </label>
+
+          <label class="field">
+            <span>Base URL</span>
+            <input id="baseUrlInput" type="text" placeholder="https://api.openai.com/v1">
+          </label>
+
+          <div class="settings-actions">
+            <button id="saveProviderBtn" class="primary-btn" type="button">Зберегти</button>
+            <button id="testProviderBtn" class="secondary-btn" type="button">Перевірити</button>
+            <button id="clearProviderBtn" class="danger-btn" type="button">Очистити</button>
+          </div>
+
+          <div id="providerStatus" class="provider-status">Не налаштовано</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

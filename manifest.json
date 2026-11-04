@@ -1,0 +1,68 @@
+{
+  "manifest_version": 3,
+  "name": "AI Quiz Generator",
+  "short_name": "AI Quiz Generator",
+  "version": "1.2.0",
+  "description": "Генеруйте тестові питання з навчальних матеріалів за допомогою OpenAI, Gemini, DeepSeek, Manus або Mistral.",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "activeTab",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://naurok.com.ua/*",
+    "https://api.openai.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.manus.ai/*",
+    "https://api.mistral.ai/*",
+    "https://api.deepseek.com/*",
+    "https://commons.wikimedia.org/*",
+    "https://upload.wikimedia.org/*",
+    "https://api.openverse.org/*",
+    "https://live.staticflickr.com/*",
+    "https://*.staticflickr.com/*",
+    "https://*.amazonaws.com/*",
+    "https://*.s3.amazonaws.com/*",
+    "https://storage.googleapis.com/*",
+    "https://*.storage.googleapis.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://naurok.com.ua/test/builder/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "injected.js"
+      ],
+      "matches": [
+        "https://naurok.com.ua/*"
+      ]
+    }
+  ]
+}
