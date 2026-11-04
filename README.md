@@ -76,7 +76,7 @@
 
 Головний інтерфейс розширення, у якому користувач може додавати навчальні матеріали, формулювати запити до AI-асистента та генерувати тестові завдання.
 
-<img width="500" height="500" alt="image" src="https://github.com/user-attachments/assets/ba918ec5-9f19-4168-bb36-8ee7058a09ab" />
+<img width="600" height="500" alt="image" src="https://github.com/user-attachments/assets/ba918ec5-9f19-4168-bb36-8ee7058a09ab" />
 
 
 ![AI Quiz Generator — Chat Interface](docs/screenshots/chat-interface.png)
