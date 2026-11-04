@@ -76,18 +76,20 @@
 
 Головний інтерфейс розширення, у якому користувач може додавати навчальні матеріали, формулювати запити до AI-асистента та генерувати тестові завдання.
 
-<img width="600" height="400" alt="image" src="https://github.com/user-attachments/assets/ba918ec5-9f19-4168-bb36-8ee7058a09ab" />
+<p align="center">
+ <img width="600" height="400" alt="image" src="https://github.com/user-attachments/assets/ba918ec5-9f19-4168-bb36-8ee7058a09ab" />
+</p>
 
-
-![AI Quiz Generator — Chat Interface](docs/screenshots/chat-interface.png)
 
 ### 2. Налаштування AI-провайдера
 
 Інтерфейс налаштування підключення до мовних моделей. Користувач може вибрати провайдера, вказати API-ключ, назву моделі та Base URL, а також перевірити з'єднання.
 
-**Скріншот 2 — Налаштування AI-провайдера**
+<p align="center">
+  <img width="600" height="400" alt="AI Quiz Generator" src="https://github.com/user-attachments/assets/ae6322bd-a494-454e-af5a-e23c6a6207bd" />
+</p>
 
-![AI Quiz Generator — AI Provider Settings](docs/screenshots/ai-provider.png)
+
 
 ---
 
